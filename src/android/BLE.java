@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.Iterator;
 import java.util.UUID;
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.*;
 import android.util.Base64;
