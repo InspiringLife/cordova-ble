@@ -33,6 +33,7 @@
 <!-- 			<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> -->
 		</config-file>
 		<source-file src="src/android/BLE.java" target-dir="src/com/evothings" />
+		<source-file src="src/android/ConnectedThread.java" target-dir="src/com/evothings" />
 	</platform>
 
 	<platform name="ios">
