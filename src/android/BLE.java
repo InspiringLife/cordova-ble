@@ -23,6 +23,9 @@ import org.json.JSONObject;
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.bluetooth.BluetoothAdapter.LeScanCallback;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
 import android.content.*;
 import android.app.Activity;
 import java.util.HashMap;
@@ -55,6 +58,8 @@ public class BLE
 
 	// private static final int PERMISSION_REQUEST_COARSE_LOCATION = 1;
 	private static final int PERMISSION_REQUEST_FINE_LOCATION = 1;
+
+	private ConnectedThread mConnectedThread; // bluetooth background worker thread to send and receive data
 
 	private static final int ACTIVITY_REQUEST_ENABLE_BLUETOOTH = 1;
 	private static final int ACTIVITY_REQUEST_ENABLE_LOCATION = 2;
@@ -91,6 +96,18 @@ public class BLE
 	// Monotonically incrementing key to the Gatt map.
 	int mNextGattHandle = 1;
 
+	// Used for BLE Headphone Connection Starts.
+
+	private BluetoothSocket mBTSocket = null; // bi-directional client-to-client data path
+
+	private Handler mHandler; // Our main handler that will receive callback notifications
+
+	private static final UUID BT_MODULE_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+
+	private BluetoothAdapter mBTAdapter;
+
+	// Used for BLE Headphone Connection Ends.
+
 	private void runAction(Runnable action)
 	{
 		// Original method, call directly.
@@ -125,9 +142,44 @@ public class BLE
 				new BondStateReceiver(),
 				new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
 
+			mContext.registerReceiver(
+					blReceiver,
+					new IntentFilter(BluetoothDevice.ACTION_FOUND));
+
 			mRegisteredReceivers = true;
 		}
+
+		mBTAdapter = BluetoothAdapter.getDefaultAdapter(); // get a handle on the bluetooth radio
 	}
+
+	final BroadcastReceiver blReceiver = new BroadcastReceiver() {
+		@Override
+		public void onReceive(Context context, Intent intent) {
+			String action = intent.getAction();
+			if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+				BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+				if (device.getBluetoothClass().getDeviceClass() == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE ||
+						device.getBluetoothClass()
+								.getDeviceClass() == BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET
+						||
+						device.getBluetoothClass().getDeviceClass() == BluetoothClass.Device.AUDIO_VIDEO_LOUDSPEAKER ||
+						device.getBluetoothClass().getDeviceClass() == BluetoothClass.Device.AUDIO_VIDEO_HEADPHONES) {
+					try {
+
+						JSONObject jsonObject = new JSONObject();
+						jsonObject.put("address", device.getAddress());
+						jsonObject.put("rssi", device.getType());
+						jsonObject.put("name", device.getName());
+						// jsonObject.put("scanRecord", Base64.encodeToString(scanRecord,
+						// Base64.NO_WRAP));
+						keepCallback(mScanCallbackContext, jsonObject);
+					} catch (JSONException e) {
+						mScanCallbackContext.error(e.toString());
+					}
+				}
+			}
+		}
+	};
 
 	// Handles JavaScript-to-native function calls.
 	// Returns true if a supported function was called, false otherwise.
@@ -159,6 +211,11 @@ public class BLE
 			}
 			else if ("connect".equals(action)) {
 				connect(args, callbackContext);
+			}
+			else if ("connectHeadphone".equals(action)) {
+				connectHeadphone(args, callbackContext);
+			} else if ("disconnectHeadphone".equals(action)) {
+				disconnectHeadphone(args, callbackContext);
 			}
 			else if ("close".equals(action)) {
 				close(args, callbackContext);
@@ -235,6 +292,9 @@ public class BLE
 			e.printStackTrace();
 			callbackContext.error(e.getMessage());
 			return false;
+		}
+		catch (IOException e) {
+			throw new RuntimeException(e);
 		}
 
 		return true;
@@ -742,6 +802,94 @@ public class BLE
 				}
 			}
 		});
+	}
+
+	private boolean pairDevice(BluetoothDevice device) {
+		try {
+			// Use reflection to invoke hidden method (createBond) and force pairing
+			// Note: This might not work on all devices due to security reasons
+			// Use this with caution, as it's not officially supported and may lead to
+			// security issues
+			device.getClass().getMethod("createBond").invoke(device);
+			return true;
+		} catch (Exception e) {
+			e.printStackTrace();
+			return false;
+		}
+	}
+
+	private void disconnectHeadphone(final CordovaArgs args, final CallbackContext callbackContext) throws IOException {
+
+		if (mConnectedThread != null) {
+			mConnectedThread.cancel(); // Close the ConnectedThread
+			mConnectedThread = null;
+		}
+
+		if (mBTSocket != null) {
+			try {
+				mBTSocket.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+
+		try {
+			BluetoothDevice device = mBTAdapter.getRemoteDevice(args.getString(0));
+
+			try {
+				Method method = device.getClass().getMethod("removeBond", (Class[]) null);
+				if (method != null) {
+					method.invoke(device, (Object[]) null);
+				}
+
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+
+			mBTSocket.close();
+		}  catch (Exception e) {
+			e.printStackTrace();
+			callbackContext.error(e.toString());
+		}
+	}
+
+	private void connectHeadphone(final CordovaArgs args, final CallbackContext callbackContext) throws IOException {
+
+		new Thread() {
+			@Override
+			public void run() {
+				boolean fail = false;
+
+				try {
+					BluetoothDevice device = mBTAdapter.getRemoteDevice(args.getString(0));
+
+//					try {
+//						mBTSocket = createBluetoothSocket(device);
+//					} catch (IOException e) {
+//						fail = true;
+//					}
+
+					if (!(device.getBondState() == BluetoothDevice.BOND_BONDED)) {
+						// Device is not bonded, ask the user to pair
+						if (!pairDevice(device)) {
+							fail = true;
+						}
+					}
+
+					if (!fail) {
+						mBTSocket.connect();
+						mConnectedThread = new ConnectedThread(mBTSocket, mHandler);					
+						mConnectedThread.start();
+					}
+				} catch (IOException e) {
+					fail = true;
+				}
+				catch (Exception e) {
+					e.printStackTrace();
+					callbackContext.error(e.toString());
+				}
+			}
+		}.start();
 	}
 
 	// API implementation.
