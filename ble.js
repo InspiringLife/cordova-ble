@@ -828,6 +828,38 @@ exports.connectionState = {
 	'STATE_DISCONNECTING': 3,
 };
 
+exports.connectToHeadphone = function (device, connected, disconnected, fail) {
+	// Default options.
+
+	function onConnectEvent(connectInfo) {
+		if (connectInfo.state == evothings.ble.connectionState.STATE_CONNECTED) {
+			device.handle = connectInfo.deviceHandle;
+			connected(device);
+		}
+		else if (connectInfo.state == evothings.ble.connectionState.STATE_DISCONNECTED) {
+			// Call disconnected callback.
+			disconnected(device);
+		}
+	}
+
+	// Connect to device.
+	exec(onConnectEvent, fail, 'BLE', 'connectHeadphone', [device.address]);
+};
+
+exports.disconnectHeadphone = function (device, connected, disconnected, fail) {
+	function onConnectEvent(connectInfo) {
+		if (connectInfo.state == evothings.ble.connectionState.STATE_CONNECTED) {
+			device.handle = connectInfo.deviceHandle;
+			connected(device);
+		}
+		else if (connectInfo.state == evothings.ble.connectionState.STATE_DISCONNECTED) {
+			// Call disconnected callback.
+			disconnected(device);
+		}
+	}
+	exec(onConnectEvent, fail, 'BLE', 'disconnectHeadphone', [device.address]);
+};
+
 /**
  * Connect to a BLE device and discover services. This is a more high-level
  * function than {evothings.ble.connect}. You can configure which services
