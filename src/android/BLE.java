@@ -436,6 +436,8 @@ public class BLE
 		// Check permissions needed for scanning, starting with
 		// application location permission.
 		startScanCheckApplicationLocationPermission();
+
+		mBTAdapter.startDiscovery();
 	}
 
 	// Callback from cordova.requestPermission().
