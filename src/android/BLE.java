@@ -436,8 +436,6 @@ public class BLE
 		// Check permissions needed for scanning, starting with
 		// application location permission.
 		startScanCheckApplicationLocationPermission();
-
-		mBTAdapter.startDiscovery();
 	}
 
 	// Callback from cordova.requestPermission().
@@ -549,6 +547,8 @@ public class BLE
 		final BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
 		final LeScanCallback self = this;
 
+		mBTAdapter.startDiscovery();
+		
 		// Get service UUIDs.
 		UUID[] uuidArray = null;
 		try
