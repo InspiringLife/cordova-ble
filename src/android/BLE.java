@@ -60,6 +60,17 @@ public class BLE
 	// private static final int PERMISSION_REQUEST_COARSE_LOCATION = 1;
 	private static final int PERMISSION_REQUEST_FINE_LOCATION = 1;
 
+	// Android 12 (API 31) and above. BLUETOOTH_SCAN/BLUETOOTH_CONNECT replace
+	// the fine location permission as the gate on BLE scanning and connecting.
+	private static final int PERMISSION_REQUEST_BLUETOOTH_SCAN = 2;
+	private static final int PERMISSION_REQUEST_BLUETOOTH_CONNECT = 3;
+
+	// Requested together, since a scan is always followed by a connect.
+	private static final String[] BLUETOOTH_SCAN_PERMISSIONS = {
+		Manifest.permission.BLUETOOTH_SCAN,
+		Manifest.permission.BLUETOOTH_CONNECT
+	};
+
 	private ConnectedThread mConnectedThread; // bluetooth background worker thread to send and receive data
 
 	private static final int ACTIVITY_REQUEST_ENABLE_BLUETOOTH = 1;
@@ -68,6 +79,10 @@ public class BLE
 	// Used by startScan().
 	private CallbackContext mScanCallbackContext = null;
 	private CordovaArgs mScanArgs;
+
+	// Used by connect() when BLUETOOTH_CONNECT has to be requested first.
+	private CallbackContext mConnectCallbackContext = null;
+	private CordovaArgs mConnectArgs;
 
 	// Used by bond and unbond.
 	private CallbackContext mBondCallbackContext = null;
@@ -433,35 +448,94 @@ public class BLE
 		mScanCallbackContext = callbackContext;
 		mScanArgs = args;
 
-		// Check permissions needed for scanning, starting with
-		// application location permission.
-		startScanCheckApplicationLocationPermission();
+		// Check the runtime permissions needed for scanning.
+		startScanCheckPermissions();
 	}
 
-	// Callback from cordova.requestPermission().
+	// Callback from cordova.requestPermission()/requestPermissions().
+	// Note: this is the deprecated-but-still-dispatched name. As of
+	// cordova-android 14, CordovaInterfaceImpl calls onRequestPermissionResult
+	// (no 's'), not onRequestPermissionsResult, so this signature is correct.
 	@Override
 	public void onRequestPermissionResult(int requestCode, String[] permissions,
 		int[] grantResults) throws JSONException
 	{
-		if (PERMISSION_REQUEST_FINE_LOCATION == requestCode) //(PERMISSION_REQUEST_COARSE_LOCATION == requestCode)
+		boolean isBluetoothRequest = (PERMISSION_REQUEST_BLUETOOTH_SCAN == requestCode);
+		boolean isLocationRequest = (PERMISSION_REQUEST_FINE_LOCATION == requestCode);
+		boolean isConnectRequest = (PERMISSION_REQUEST_BLUETOOTH_CONNECT == requestCode);
+
+		if (!isBluetoothRequest && !isLocationRequest && !isConnectRequest)
 		{
-			if (PackageManager.PERMISSION_GRANTED == grantResults[0])
+			return;
+		}
+
+		// An empty grantResults array means the request was cancelled.
+		boolean granted = (grantResults.length > 0);
+		for (int i = 0; i < grantResults.length; ++i)
+		{
+			if (PackageManager.PERMISSION_GRANTED != grantResults[i])
 			{
-				// Permission ok, check system location setting.
+				granted = false;
+				break;
+			}
+		}
+
+		if (isConnectRequest)
+		{
+			CordovaArgs args = mConnectArgs;
+			CallbackContext cc = mConnectCallbackContext;
+			mConnectArgs = null;
+			mConnectCallbackContext = null;
+			if (null == cc) {
+				return;
+			}
+			if (granted) {
+				connectImpl(args, cc);
+			} else {
+				cc.error("Bluetooth connect permission not granted");
+			}
+			return;
+		}
+
+		// Scan request (either the Android 12+ Bluetooth permissions or the
+		// pre-12 fine location permission).
+		if (null == mScanCallbackContext) {
+			return;
+		}
+		if (granted)
+		{
+			// Permission ok, check system location setting.
+			startScanCheckSystemLocationSetting();
+		}
+		else
+		{
+			// Permission NOT ok, send callback error.
+			mScanCallbackContext.error(isBluetoothRequest
+				? "Bluetooth scan permission not granted"
+				: "Location permission not granted");
+			mScanCallbackContext = null;
+		}
+	}
+
+	private void startScanCheckPermissions()
+	{
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+		{
+			// Android 12 and above: BLUETOOTH_SCAN/BLUETOOTH_CONNECT gate scanning.
+			if (cordova.hasPermission(Manifest.permission.BLUETOOTH_SCAN) &&
+				cordova.hasPermission(Manifest.permission.BLUETOOTH_CONNECT))
+			{
 				startScanCheckSystemLocationSetting();
 			}
 			else
 			{
-				// Permission NOT ok, send callback error.
-				mScanCallbackContext.error("Location permission not granted");
-				mScanCallbackContext = null;
+				cordova.requestPermissions(this, PERMISSION_REQUEST_BLUETOOTH_SCAN,
+					BLUETOOTH_SCAN_PERMISSIONS);
 			}
+			return;
 		}
-	}
 
-	private void startScanCheckApplicationLocationPermission()
-	{
-		// Location permission check.
+		// Below Android 12: fine location permission gates scanning.
 		if (cordova.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION))//Manifest.permission.ACCESS_COARSE_LOCATION
 		{
 			// Location permission ok, next check system location setting.
@@ -477,8 +551,11 @@ public class BLE
 
 	private void startScanCheckSystemLocationSetting()
 	{
-		// If below Marshmallow System Location setting does not need to be on.
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+		// Below Marshmallow the System Location setting does not need to be on.
+		// Neither does it on Android 12 and above, where BLUETOOTH_SCAN is
+		// declared neverForLocation and scanning is no longer a location API.
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+			Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 			// Go ahead and start scanning.
 			startScanImpl(mScanArgs, mScanCallbackContext);
 			return;
@@ -809,12 +886,11 @@ public class BLE
 
 	private boolean pairDevice(BluetoothDevice device) {
 		try {
-			// Use reflection to invoke hidden method (createBond) and force pairing
-			// Note: This might not work on all devices due to security reasons
-			// Use this with caution, as it's not officially supported and may lead to
-			// security issues
-			device.getClass().getMethod("createBond").invoke(device);
-			return true;
+			// createBond() is public API (since API 19), so call it directly.
+			// It was previously invoked by reflection as if it were a hidden
+			// method; that form is subject to the non-SDK interface restrictions
+			// and would silently fail on newer Android versions.
+			return device.createBond();
 		} catch (Exception e) {
 			e.printStackTrace();
 			return false;
@@ -897,6 +973,24 @@ public class BLE
 
 	// API implementation.
 	private void connect(final CordovaArgs args, final CallbackContext callbackContext)
+	{
+		// On Android 12 and above BLUETOOTH_CONNECT is required. A scan grants it
+		// as a side effect, but connect() is also called directly with a stored
+		// device address, without scanning first, so check it here too.
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+			!cordova.hasPermission(Manifest.permission.BLUETOOTH_CONNECT))
+		{
+			mConnectArgs = args;
+			mConnectCallbackContext = callbackContext;
+			cordova.requestPermission(this, PERMISSION_REQUEST_BLUETOOTH_CONNECT,
+				Manifest.permission.BLUETOOTH_CONNECT);
+			return;
+		}
+
+		connectImpl(args, callbackContext);
+	}
+
+	private void connectImpl(final CordovaArgs args, final CallbackContext callbackContext)
 	{
 		Log.i("@@@@@@", "@@@ connect");
 

@@ -3,7 +3,7 @@
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	xmlns:m2="http://schemas.microsoft.com/appx/2013/manifest"
 	id="cordova-plugin-ble"
-	version="2.0.1">
+	version="2.1.0">
 
 	<engines>
 		<engine name="cordova" version=">=6.0.0" />
@@ -26,10 +26,25 @@
 			</feature>
 		</config-file>
 		<config-file target="AndroidManifest.xml" parent="/manifest">
-			<uses-permission android:name="android.permission.BLUETOOTH" />
-			<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-			<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-			<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+			<!--
+			Android 12 (API 31) and above. BLUETOOTH_SCAN and BLUETOOTH_CONNECT
+			supersede the legacy BLUETOOTH/BLUETOOTH_ADMIN/location permissions.
+			neverForLocation is correct here: the plugin only reports address,
+			name and RSSI to identify a specific machine, and no caller consumes
+			the raw scanRecord to derive physical location. It also means users
+			are not prompted for location just to scan on Android 12+.
+			-->
+			<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+			<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+			<!--
+			Android 11 (API 30) and below. Capped so they are not requested on
+			API 31+, where they are no longer the permissions that gate scanning.
+			Fine location is still required pre-31 for BLE scanning to return results.
+			-->
+			<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+			<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+			<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+			<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 <!-- 			<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> -->
 		</config-file>
 		<source-file src="src/android/BLE.java" target-dir="src/com/evothings" />
